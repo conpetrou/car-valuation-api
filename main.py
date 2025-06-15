@@ -1,61 +1,49 @@
-from fastapi import FastAPI, Request
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+import hashlib
 import requests
 
 app = FastAPI()
 
-VIN_API_KEY = "bb00733ff350"
+# Allow all CORS origins for development
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-class CarInput(BaseModel):
-    vin: str | None = None
-    make: str | None = None
-    model: str | None = None
-    submodel: str | None = None
-    year: int | None = None
-    mileage: float
-    mileage_unit: str  # "km" or "mi"
-    fuel_type: str | None = None
-    transmission: str | None = None
-    condition: str | None = None
-    trim: str | None = None
+API_KEY = "bb00733ff350"
+SECRET_KEY = "38f4e93d23"
 
-@app.post("/estimate")
-def estimate_car_value(data: CarInput):
-    # If VIN is provided, decode it
-    if data.vin:
-        vin_url = f"https://api.vindecoder.eu/2.0/{VIN_API_KEY}/{data.vin}.json"
-        response = requests.get(vin_url)
+@app.get("/")
+def root():
+    return {"message": "VIN Decoder API"}
 
-        if response.status_code == 200:
-            vin_data = response.json()
-            details = vin_data.get("decode", {})
+@app.get("/decode-vin/{vin}")
+def decode_vin(vin: str):
+    vin = vin.upper()
+    section = "info"
+    id = "info"
 
-            data.make = details.get("make", data.make)
-            data.model = details.get("model", data.model)
-            data.submodel = details.get("version", data.submodel)
-            data.year = int(details.get("year", data.year or 0))
-            data.fuel_type = details.get("fueltype", data.fuel_type)
-            data.transmission = details.get("gearbox", data.transmission)
-            data.trim = details.get("equipment", data.trim)
-        else:
-            return {"error": "Failed to decode VIN"}
+    # Compute control sum using SHA1
+    hash_string = f"{vin}|{id}|{API_KEY}|{SECRET_KEY}"
+    control_sum = hashlib.sha1(hash_string.encode()).hexdigest()[:10]
 
-    # Fallback/default values if anything is missing
-    if not data.make or not data.model or not data.year:
-        return {"error": "Missing key information to estimate value."}
+    # API URL
+    url = f"https://api.vindecoder.eu/3.2/{API_KEY}/{control_sum}/decode/{section}/{vin}.json"
 
-    # Simulated valuation logic
-    base_price = 30000
-    age_penalty = (2025 - data.year) * 700
-    mileage_penalty = data.mileage * (0.05 if data.mileage_unit == "km" else 0.08)
-    condition_modifier = {
-        "excellent": 1.1,
-        "good": 1.0,
-        "fair": 0.9,
-        "poor": 0.7
-    }.get(data.condition or "good", 1.0)
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
 
-    estimated_value = (base_price - age_penalty - mileage_penalty) * condition_modifier
-    estimated_value = max(estimated_value, 1000)  # Set minimum value
+        # Optional: Check if VIN was successfully decoded
+        if "decode" not in data or not data["decode"]:
+            raise HTTPException(status_code=404, detail="VIN details not found")
 
-    return {"estimated_value": round(estimated_value, 2)}
+        return data
+
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
