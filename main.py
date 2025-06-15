@@ -1,40 +1,47 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 app = FastAPI()
 
-class CarData(BaseModel):
-    vin: str
+# Allow all origins for dev purposes — secure it later in production
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+class CarDetails(BaseModel):
+    vin: str | None = None
     make: str
     model: str
+    submodel: str | None = None
     year: int
-    mileage: int
+    mileage: float
+    mileage_unit: str  # "km" or "mi"
+    fuel_type: str
+    transmission: str
+    condition: str
+    trim: str
 
 @app.post("/estimate")
-def estimate_value(data: CarData):
-    current_year = 2025
-    age = current_year - data.year
-    mileage_penalty = data.mileage * 0.03  # €0.03 per km
-    age_penalty = age * 500  # €500 per year
+async def estimate_car_value(details: CarDetails):
+    mileage_km = details.mileage * 1.60934 if details.mileage_unit == "mi" else details.mileage
 
-    # Base value per brand (just examples)
-    base_prices = {
-        "toyota": 18000,
-        "bmw": 25000,
-        "mercedes": 26000,
-        "audi": 24000,
-        "ford": 17000,
-        "honda": 18500,
-        "nissan": 18000,
-        "volkswagen": 20000,
-    }
+    # Simple scoring mock (adjust with real ML or logic later)
+    base_value = 10000
+    age_penalty = (2025 - details.year) * 500
+    mileage_penalty = (mileage_km // 10000) * 300
+    condition_bonus = {"excellent": 1500, "good": 700, "fair": 0, "needs repair": -1000}
+    trim_bonus = {"basic": 0, "mid-range": 800, "full-spec": 1500, "custom": 1000}
 
-    make_key = data.make.lower()
-    base_price = base_prices.get(make_key, 19000)  # default if make not found
+    estimated_value = base_value - age_penalty - mileage_penalty
+    estimated_value += condition_bonus.get(details.condition.lower(), 0)
+    estimated_value += trim_bonus.get(details.trim.lower(), 0)
 
-    estimated_value = base_price - age_penalty - mileage_penalty
-
-    # Never go below €2,000
-    estimated_value = max(estimated_value, 2000)
+    # Final rounding
+    estimated_value = max(estimated_value, 1000)
 
     return {"estimated_value": round(estimated_value, 2)}
