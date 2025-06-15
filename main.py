@@ -1,47 +1,61 @@
 from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import requests
 
 app = FastAPI()
 
-# Allow all origins for dev purposes — secure it later in production
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+VIN_API_KEY = "bb00733ff350"
 
-class CarDetails(BaseModel):
+class CarInput(BaseModel):
     vin: str | None = None
-    make: str
-    model: str
+    make: str | None = None
+    model: str | None = None
     submodel: str | None = None
-    year: int
+    year: int | None = None
     mileage: float
     mileage_unit: str  # "km" or "mi"
-    fuel_type: str
-    transmission: str
-    condition: str
-    trim: str
+    fuel_type: str | None = None
+    transmission: str | None = None
+    condition: str | None = None
+    trim: str | None = None
 
 @app.post("/estimate")
-async def estimate_car_value(details: CarDetails):
-    mileage_km = details.mileage * 1.60934 if details.mileage_unit == "mi" else details.mileage
+def estimate_car_value(data: CarInput):
+    # If VIN is provided, decode it
+    if data.vin:
+        vin_url = f"https://api.vindecoder.eu/2.0/{VIN_API_KEY}/{data.vin}.json"
+        response = requests.get(vin_url)
 
-    # Simple scoring mock (adjust with real ML or logic later)
-    base_value = 10000
-    age_penalty = (2025 - details.year) * 500
-    mileage_penalty = (mileage_km // 10000) * 300
-    condition_bonus = {"excellent": 1500, "good": 700, "fair": 0, "needs repair": -1000}
-    trim_bonus = {"basic": 0, "mid-range": 800, "full-spec": 1500, "custom": 1000}
+        if response.status_code == 200:
+            vin_data = response.json()
+            details = vin_data.get("decode", {})
 
-    estimated_value = base_value - age_penalty - mileage_penalty
-    estimated_value += condition_bonus.get(details.condition.lower(), 0)
-    estimated_value += trim_bonus.get(details.trim.lower(), 0)
+            data.make = details.get("make", data.make)
+            data.model = details.get("model", data.model)
+            data.submodel = details.get("version", data.submodel)
+            data.year = int(details.get("year", data.year or 0))
+            data.fuel_type = details.get("fueltype", data.fuel_type)
+            data.transmission = details.get("gearbox", data.transmission)
+            data.trim = details.get("equipment", data.trim)
+        else:
+            return {"error": "Failed to decode VIN"}
 
-    # Final rounding
-    estimated_value = max(estimated_value, 1000)
+    # Fallback/default values if anything is missing
+    if not data.make or not data.model or not data.year:
+        return {"error": "Missing key information to estimate value."}
+
+    # Simulated valuation logic
+    base_price = 30000
+    age_penalty = (2025 - data.year) * 700
+    mileage_penalty = data.mileage * (0.05 if data.mileage_unit == "km" else 0.08)
+    condition_modifier = {
+        "excellent": 1.1,
+        "good": 1.0,
+        "fair": 0.9,
+        "poor": 0.7
+    }.get(data.condition or "good", 1.0)
+
+    estimated_value = (base_price - age_penalty - mileage_penalty) * condition_modifier
+    estimated_value = max(estimated_value, 1000)  # Set minimum value
 
     return {"estimated_value": round(estimated_value, 2)}
